@@ -160,23 +160,21 @@ const KokoroModelManagerView: React.FC<KokoroModelManagerViewProps> = ({ onBack 
         <div className='flex items-center gap-3 pt-1 flex-wrap'>
           {!isReady && !isDownloading && (
             <>
-              {modelState.gpuInfo?.available ? (
+              <button
+                type='button'
+                className='btn btn-primary btn-sm gap-2'
+                onClick={() => handleDownload('wasm')}
+              >
+                <PiCloudArrowDown className='h-4 w-4' />
+                {_('Download Voice Model (~86 MB CPU)')}
+              </button>
+              {modelState.gpuInfo?.available && (
                 <button
                   type='button'
-                  className='btn btn-primary btn-sm gap-2'
+                  className='btn btn-outline btn-sm gap-2'
                   onClick={() => handleDownload('webgpu')}
                 >
-                  <PiCloudArrowDown className='h-4 w-4' />
-                  {_('Download GPU Model (~325 MB)')}
-                </button>
-              ) : (
-                <button
-                  type='button'
-                  className='btn btn-primary btn-sm gap-2'
-                  onClick={() => handleDownload('wasm')}
-                >
-                  <PiCloudArrowDown className='h-4 w-4' />
-                  {_('Download Voice Model (~86 MB)')}
+                  ⚡ {_('Download GPU Model (~325 MB)')}
                 </button>
               )}
             </>
@@ -189,6 +187,16 @@ const KokoroModelManagerView: React.FC<KokoroModelManagerViewProps> = ({ onBack 
               onClick={() => handleDownload('webgpu')}
             >
               ⚡ {_('Enable GPU Acceleration (~325 MB)')}
+            </button>
+          )}
+
+          {isReady && modelState.activeDevice === 'webgpu' && (
+            <button
+              type='button'
+              className='btn btn-outline btn-sm gap-2'
+              onClick={() => handleDownload('wasm')}
+            >
+              {_('Switch to CPU Mode (Guaranteed Studio Quality)')}
             </button>
           )}
 

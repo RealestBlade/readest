@@ -34,10 +34,29 @@ export interface KokoroVoiceProfile {
   description: string;
 }
 
-export const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+export const KOKORO_CPU_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+// WebGPU patched graph repository that replaces ConvTranspose with Conv to fix vocoder distortion
+export const KOKORO_WEBGPU_MODEL_ID = 'DevAmarnadhCG/Kokoro-82M-v1.0-ONNX-webgpu';
+export const KOKORO_MODEL_ID = KOKORO_CPU_MODEL_ID;
 export const KOKORO_CPU_MODEL_SIZE = '~86 MB (CPU)';
 export const KOKORO_GPU_MODEL_SIZE = '~325 MB (GPU)';
 export const KOKORO_MODEL_SIZE = '~86 MB'; // Compatibility export
+
+const PREFERRED_DEVICE_KEY = 'readest_kokoro_device';
+
+export function getPreferredDevice(): KokoroDeviceType {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const val = window.localStorage.getItem(PREFERRED_DEVICE_KEY);
+    if (val === 'webgpu' || val === 'wasm') return val;
+  }
+  return 'wasm'; // Default to CPU for guaranteed crystal-clear, distortion-free audio
+}
+
+export function setPreferredDevice(dev: KokoroDeviceType): void {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.setItem(PREFERRED_DEVICE_KEY, dev);
+  }
+}
 
 export const KOKORO_VOICES: KokoroVoiceProfile[] = [
   // American English
@@ -305,8 +324,10 @@ class KokoroModelManager {
         this.state.cachedModelType = 'none';
       }
 
-      // Check if suitable model is cached
-      if (this.state.gpuInfo.available && hasFp32) {
+      const preferred = getPreferredDevice();
+
+      // Check if suitable model is cached based on preferred device
+      if (preferred === 'webgpu' && this.state.gpuInfo.available && hasFp32) {
         this.state.status = 'ready';
         this.state.progress = 100;
         this.state.activeDevice = 'webgpu';
@@ -317,9 +338,14 @@ class KokoroModelManager {
         this.state.status = 'ready';
         this.state.progress = 100;
         this.state.activeDevice = 'wasm';
-        this.state.progressText = this.state.gpuInfo.available
-          ? `Ready on CPU (GPU model available for download)`
-          : `Ready on CPU (WASM)`;
+        this.state.progressText = 'Ready on CPU (WASM)';
+        this.notify();
+        return true;
+      } else if (hasFp32 && this.state.gpuInfo.available) {
+        this.state.status = 'ready';
+        this.state.progress = 100;
+        this.state.activeDevice = 'webgpu';
+        this.state.progressText = `Ready on GPU (${this.state.gpuInfo.adapterName})`;
         this.notify();
         return true;
       }
@@ -330,10 +356,15 @@ class KokoroModelManager {
   }
 
   async loadOrDownloadModel(preferredDevice?: KokoroDeviceType): Promise<boolean> {
+    const targetDev = preferredDevice || getPreferredDevice();
+    setPreferredDevice(targetDev);
+
     if (this.state.status === 'ready' && this.ttsInstance) {
-      if (!preferredDevice || this.state.activeDevice === preferredDevice) {
+      if (this.state.activeDevice === targetDev) {
         return true;
       }
+      // If switching device, reset active instance
+      this.ttsInstance = null;
     }
 
     if (this.downloadPromise) {
@@ -428,15 +459,16 @@ class KokoroModelManager {
         };
 
         let tts: unknown = null;
-        let activeDevice: KokoroDeviceType = 'wasm';
+        let activeDevice: KokoroDeviceType = targetDev;
 
-        // Try WebGPU first if GPU is available and not explicitly forced to wasm
-        if (gpuInfo.available && preferredDevice !== 'wasm') {
+        // Try WebGPU if requested and available
+        if (targetDev === 'webgpu' && gpuInfo.available) {
           try {
             this.state.progressText = `Initializing GPU acceleration (${gpuInfo.adapterName})...`;
             this.notify();
 
-            tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+            // Load patched WebGPU model that replaces ConvTranspose with Conv
+            tts = await KokoroTTS.from_pretrained(KOKORO_WEBGPU_MODEL_ID, {
               dtype: 'fp32',
               device: 'webgpu',
               progress_callback: progressCb,
@@ -449,21 +481,22 @@ class KokoroModelManager {
               gpuErr,
             );
             tts = null;
+            setPreferredDevice('wasm');
           }
         }
 
-        // If WebGPU was unavailable, skipped, or failed: use CPU WASM
+        // Use CPU WASM (default rock-solid q8 engine)
         if (!tts) {
           activeDevice = 'wasm';
           this.state.progressText = 'Starting on-device neural engine (CPU WASM)...';
           this.notify();
 
-          tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+          tts = await KokoroTTS.from_pretrained(KOKORO_CPU_MODEL_ID, {
             dtype: 'q8',
             device: 'wasm',
             progress_callback: progressCb,
           });
-          console.log('[Kokoro] Initialized CPU WASM engine');
+          console.log('[Kokoro] Initialized CPU WASM engine (q8)');
         }
 
         this.ttsInstance = tts;

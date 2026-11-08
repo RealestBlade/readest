@@ -791,23 +791,32 @@ const TTSPlayerSheet = ({
               <div className='shrink-0 ml-2 flex items-center gap-1.5'>
                 {kokoroState.status === 'ready' ? (
                   <>
-                    {kokoroState.activeDevice === 'wasm' &&
-                      kokoroState.gpuInfo?.available &&
-                      kokoroState.cachedModelType !== 'gpu' &&
-                      kokoroState.cachedModelType !== 'both' && (
-                        <button
-                          type='button'
-                          onClick={async () => {
-                            await kokoroModelManager.loadOrDownloadModel('webgpu');
-                          }}
-                          className='btn btn-xs btn-outline btn-success gap-1'
-                          title={_('Download GPU model (~325 MB) for fast reading on {{gpu}}', {
-                            gpu: kokoroState.gpuInfo.adapterName,
-                          })}
-                        >
-                          ⚡ {_('Use GPU')}
-                        </button>
-                      )}
+                    {kokoroState.activeDevice === 'webgpu' && (
+                      <button
+                        type='button'
+                        onClick={async () => {
+                          await kokoroModelManager.loadOrDownloadModel('wasm');
+                        }}
+                        className='btn btn-xs btn-ghost text-[11px]'
+                        title={_('Switch to CPU mode for guaranteed crystal-clear studio sound')}
+                      >
+                        {_('Use CPU')}
+                      </button>
+                    )}
+                    {kokoroState.activeDevice === 'wasm' && kokoroState.gpuInfo?.available && (
+                      <button
+                        type='button'
+                        onClick={async () => {
+                          await kokoroModelManager.loadOrDownloadModel('webgpu');
+                        }}
+                        className='btn btn-xs btn-outline btn-success gap-1'
+                        title={_('Enable GPU acceleration on {{gpu}}', {
+                          gpu: kokoroState.gpuInfo.adapterName,
+                        })}
+                      >
+                        ⚡ {_('Use GPU')}
+                      </button>
+                    )}
                     <button
                       type='button'
                       onClick={() => setView('voice')}

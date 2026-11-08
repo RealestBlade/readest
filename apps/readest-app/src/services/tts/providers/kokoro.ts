@@ -48,6 +48,29 @@ export function float32ToWav(samples: Float32Array, sampleRate = 24000): ArrayBu
   return buffer;
 }
 
+// Sanitize audio samples to remove NaNs/Infs and soft-normalize any extreme peaks
+export function sanitizeAudioSamples(raw: Float32Array | number[]): Float32Array {
+  const samples = raw instanceof Float32Array ? new Float32Array(raw) : new Float32Array(raw);
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    let val = samples[i]!;
+    if (isNaN(val) || !isFinite(val)) {
+      val = 0;
+      samples[i] = 0;
+    }
+    const abs = Math.abs(val);
+    if (abs > peak) peak = abs;
+  }
+  // Soft normalize if peak exceeds 1.0 (prevents harsh digital clipping/distortion)
+  if (peak > 1.0) {
+    const scale = 0.95 / peak;
+    for (let i = 0; i < samples.length; i++) {
+      samples[i] = (samples[i] ?? 0) * scale;
+    }
+  }
+  return samples;
+}
+
 function writeString(view: DataView, offset: number, string: string) {
   for (let i = 0; i < string.length; i++) {
     view.setUint8(offset + i, string.charCodeAt(i));
@@ -162,17 +185,21 @@ export class KokoroSpeechProvider implements SpeechProvider {
         `[Kokoro] Synthesized ${text.length} chars in ${elapsed}ms (${rawVoice}) on ${activeDev}`,
       );
 
-      let audioBuffer: ArrayBuffer;
-      if (typeof rawAudio.toWav === 'function') {
-        audioBuffer = rawAudio.toWav();
-      } else if (rawAudio.audio instanceof Float32Array) {
-        audioBuffer = float32ToWav(rawAudio.audio, rawAudio.sampling_rate || 24000);
-      } else if (typeof rawAudio.toBlob === 'function') {
-        const blob = rawAudio.toBlob();
-        audioBuffer = await blob.arrayBuffer();
+      // Extract and sanitize raw PCM samples
+      let floatSamples: Float32Array;
+      if (rawAudio.audio instanceof Float32Array) {
+        floatSamples = rawAudio.audio;
+      } else if (Array.isArray(rawAudio.audio)) {
+        floatSamples = new Float32Array(rawAudio.audio);
       } else {
         throw new Error('Unexpected audio format returned by Kokoro TTS');
       }
+
+      // Sanitize samples: remove NaN/Inf, soft-normalize spikes to prevent harsh digital clipping/distortion
+      const sanitizedSamples = sanitizeAudioSamples(floatSamples);
+
+      // Convert to standard 16-bit PCM WAV (RIFF/WAVE format tag 1, 16-bit)
+      const audioBuffer = float32ToWav(sanitizedSamples, rawAudio.sampling_rate || 24000);
 
       return {
         audio: audioBuffer,

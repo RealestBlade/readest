@@ -1,5 +1,9 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { float32ToWav, KokoroSpeechProvider } from '@/services/tts/providers/kokoro';
+import {
+  float32ToWav,
+  sanitizeAudioSamples,
+  KokoroSpeechProvider,
+} from '@/services/tts/providers/kokoro';
 import { kokoroModelManager, KOKORO_VOICES } from '@/services/tts/kokoroModelManager';
 
 describe('Kokoro Open-Source TTS Engine', () => {
@@ -55,6 +59,23 @@ describe('Kokoro Open-Source TTS Engine', () => {
       );
       expect(dataHeader).toBe('data');
       expect(view.getUint32(40, true)).toBe(numSamples * 2);
+    });
+
+    test('sanitizeAudioSamples clamps NaNs and soft-normalizes spikes', () => {
+      // Create noisy samples with NaNs, Infs, and huge vocoder spikes (e.g. 1000)
+      const noisy = new Float32Array([NaN, Infinity, 0.5, -0.5, 1000, -500]);
+      const clean = sanitizeAudioSamples(noisy);
+
+      expect(clean[0]).toBe(0);
+      expect(clean[1]).toBe(0);
+      // All samples must be safely within [-1.0, 1.0]
+      for (let i = 0; i < clean.length; i++) {
+        expect(clean[i]).toBeGreaterThanOrEqual(-1.0);
+        expect(clean[i]).toBeLessThanOrEqual(1.0);
+        expect(isNaN(clean[i]!)).toBe(false);
+      }
+      // Peak sample should scale close to 0.95
+      expect(clean[4]).toBeCloseTo(0.95, 2);
     });
   });
 
