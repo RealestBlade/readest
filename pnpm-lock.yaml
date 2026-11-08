@@ -135,6 +135,9 @@ importers:
       '@googleapis/androidpublisher':
         specifier: ^36.0.0
         version: 36.0.0
+      '@huggingface/transformers':
+        specifier: ^3.8.1
+        version: 3.8.1(@types/node@22.19.19)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0

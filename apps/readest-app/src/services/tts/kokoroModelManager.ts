@@ -1,14 +1,27 @@
 // Client-side manager for the open-source Kokoro-82M neural TTS model.
-// Downloads quantized ONNX weights (~86MB) into browser CacheStorage via Transformers.js,
-// tracks download progress, and provides the active KokoroTTS inference instance.
+// Supports Direct3D 12 WebGPU hardware acceleration for GPUs (such as AMD Radeon RX 570)
+// using full precision FP32 ONNX weights (~325 MB), with an automatic fallback to
+// quantized Q8 ONNX weights (~86 MB) running via WebAssembly on the CPU.
+// Manages download progress, CacheStorage caching, and inference instances.
 
 export type KokoroModelStatus = 'unloaded' | 'downloading' | 'ready' | 'error';
+export type KokoroDeviceType = 'webgpu' | 'wasm';
+
+export interface GPUInfo {
+  available: boolean;
+  adapterName: string;
+  vendor?: string;
+  architecture?: string;
+}
 
 export interface KokoroModelState {
   status: KokoroModelStatus;
   progress: number; // 0 - 100
   progressText: string;
   error: string | null;
+  activeDevice: KokoroDeviceType | null;
+  gpuInfo: GPUInfo | null;
+  cachedModelType: 'gpu' | 'cpu' | 'both' | 'none';
 }
 
 export interface KokoroVoiceProfile {
@@ -22,7 +35,9 @@ export interface KokoroVoiceProfile {
 }
 
 export const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
-export const KOKORO_MODEL_SIZE = '~86 MB';
+export const KOKORO_CPU_MODEL_SIZE = '~86 MB (CPU)';
+export const KOKORO_GPU_MODEL_SIZE = '~325 MB (GPU)';
+export const KOKORO_MODEL_SIZE = '~86 MB'; // Compatibility export
 
 export const KOKORO_VOICES: KokoroVoiceProfile[] = [
   // American English
@@ -155,6 +170,49 @@ export const KOKORO_VOICES: KokoroVoiceProfile[] = [
   },
 ];
 
+export async function detectWebGPU(): Promise<GPUInfo> {
+  if (
+    typeof navigator !== 'undefined' &&
+    'gpu' in navigator &&
+    (navigator as { gpu?: unknown }).gpu
+  ) {
+    try {
+      const gpu = (
+        navigator as unknown as { gpu: { requestAdapter: (opts?: unknown) => Promise<unknown> } }
+      ).gpu;
+      const adapter = (await gpu.requestAdapter({ powerPreference: 'high-performance' })) as {
+        info?: { description?: string; device?: string; architecture?: string; vendor?: string };
+        requestAdapterInfo?: () => Promise<{
+          description?: string;
+          device?: string;
+          architecture?: string;
+          vendor?: string;
+        }>;
+      } | null;
+      if (adapter) {
+        let name = 'Direct3D 12 GPU';
+        let vendor = '';
+        let architecture = '';
+        if (adapter.info) {
+          name =
+            adapter.info.description || adapter.info.device || adapter.info.architecture || name;
+          vendor = adapter.info.vendor || '';
+          architecture = adapter.info.architecture || '';
+        } else if (typeof adapter.requestAdapterInfo === 'function') {
+          const info = await adapter.requestAdapterInfo();
+          name = info.description || info.device || info.architecture || name;
+          vendor = info.vendor || '';
+          architecture = info.architecture || '';
+        }
+        return { available: true, adapterName: name, vendor, architecture };
+      }
+    } catch (e) {
+      console.warn('[Kokoro] WebGPU detection error:', e);
+    }
+  }
+  return { available: false, adapterName: 'CPU (WebAssembly)' };
+}
+
 type Listener = (state: KokoroModelState) => void;
 
 class KokoroModelManager {
@@ -164,6 +222,9 @@ class KokoroModelManager {
     progress: 0,
     progressText: '',
     error: null,
+    activeDevice: null,
+    gpuInfo: null,
+    cachedModelType: 'none',
   };
   private listeners: Set<Listener> = new Set();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -172,7 +233,7 @@ class KokoroModelManager {
 
   private constructor() {
     if (typeof window !== 'undefined') {
-      this.checkIfModelCached();
+      void this.checkIfModelCached();
     }
   }
 
@@ -211,20 +272,56 @@ class KokoroModelManager {
       return false;
     }
     try {
-      // Check transformers cache for kokoro onnx files
+      if (!this.state.gpuInfo) {
+        this.state.gpuInfo = await detectWebGPU();
+      }
       const cacheNames = await caches.keys();
+      let hasFp32 = false;
+      let hasQ8 = false;
       for (const name of cacheNames) {
         if (name.includes('transformers') || name.includes('onnx')) {
           const cache = await caches.open(name);
           const keys = await cache.keys();
-          const hasKokoro = keys.some((req) => req.url.includes('Kokoro') || req.url.includes('kokoro'));
-          if (hasKokoro) {
-            this.state.status = 'ready';
-            this.state.progress = 100;
-            this.notify();
-            return true;
+          for (const req of keys) {
+            const url = req.url.toLowerCase();
+            if (url.includes('kokoro')) {
+              if (url.includes('model_quantized.onnx')) {
+                hasQ8 = true;
+              } else if (url.includes('model.onnx')) {
+                hasFp32 = true;
+              }
+            }
           }
         }
+      }
+
+      if (hasFp32 && hasQ8) {
+        this.state.cachedModelType = 'both';
+      } else if (hasFp32) {
+        this.state.cachedModelType = 'gpu';
+      } else if (hasQ8) {
+        this.state.cachedModelType = 'cpu';
+      } else {
+        this.state.cachedModelType = 'none';
+      }
+
+      // Check if suitable model is cached
+      if (this.state.gpuInfo.available && hasFp32) {
+        this.state.status = 'ready';
+        this.state.progress = 100;
+        this.state.activeDevice = 'webgpu';
+        this.state.progressText = `Ready on GPU (${this.state.gpuInfo.adapterName})`;
+        this.notify();
+        return true;
+      } else if (hasQ8) {
+        this.state.status = 'ready';
+        this.state.progress = 100;
+        this.state.activeDevice = 'wasm';
+        this.state.progressText = this.state.gpuInfo.available
+          ? `Ready on CPU (GPU model available for download)`
+          : `Ready on CPU (WASM)`;
+        this.notify();
+        return true;
       }
     } catch {
       /* ignore */
@@ -232,9 +329,11 @@ class KokoroModelManager {
     return false;
   }
 
-  async loadOrDownloadModel(): Promise<boolean> {
+  async loadOrDownloadModel(preferredDevice?: KokoroDeviceType): Promise<boolean> {
     if (this.state.status === 'ready' && this.ttsInstance) {
-      return true;
+      if (!preferredDevice || this.state.activeDevice === preferredDevice) {
+        return true;
+      }
     }
 
     if (this.downloadPromise) {
@@ -244,29 +343,42 @@ class KokoroModelManager {
     this.downloadPromise = (async () => {
       this.state.status = 'downloading';
       this.state.progress = 0;
-      this.state.progressText = 'Initializing Kokoro neural engine...';
       this.state.error = null;
       this.notify();
 
       try {
-        // Dynamically load kokoro-js
-        const { KokoroTTS, env } = await import('kokoro-js');
+        const { KokoroTTS } = await import('kokoro-js');
+        const { env: hfEnv } = await import('@huggingface/transformers');
 
-        // Configure local WASM assets and proxy
-        const anyEnv = env as unknown as {
-          wasmPaths?: unknown;
-          backends?: { onnx?: { wasm?: { proxy?: boolean; wasmPaths?: unknown } } };
-        };
+        // Configure environment with local WASM paths
         if (typeof window !== 'undefined') {
-          try {
-            const ortPath = `${window.location.origin}/ort/`;
-            anyEnv.wasmPaths = ortPath;
-            if (anyEnv?.backends?.onnx?.wasm) {
-              anyEnv.backends.onnx.wasm.proxy = false;
+          const ortPath = `${window.location.origin}/ort/`;
+          const anyEnv = hfEnv as unknown as {
+            allowLocalModels?: boolean;
+            useBrowserCache?: boolean;
+            backends?: {
+              onnx?: {
+                wasm?: { wasmPaths?: string; proxy?: boolean; numThreads?: number };
+                webgpu?: { powerPreference?: string };
+              };
+            };
+          };
+          anyEnv.allowLocalModels = false;
+          anyEnv.useBrowserCache = true;
+          if (anyEnv.backends?.onnx) {
+            if (anyEnv.backends.onnx.wasm) {
               anyEnv.backends.onnx.wasm.wasmPaths = ortPath;
+              anyEnv.backends.onnx.wasm.proxy = false;
+              if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) {
+                anyEnv.backends.onnx.wasm.numThreads = Math.min(
+                  4,
+                  Math.max(1, navigator.hardwareConcurrency),
+                );
+              }
             }
-          } catch {
-            /* ignore */
+            if (anyEnv.backends.onnx.webgpu) {
+              anyEnv.backends.onnx.webgpu.powerPreference = 'high-performance';
+            }
           }
         }
 
@@ -291,6 +403,9 @@ class KokoroModelManager {
           }
         }
 
+        const gpuInfo = await detectWebGPU();
+        this.state.gpuInfo = gpuInfo;
+
         const progressCb = (p: {
           status?: string;
           progress?: number;
@@ -312,39 +427,55 @@ class KokoroModelManager {
           }
         };
 
-        // Try WebGPU first if available, with graceful fallback to WASM
         let tts: unknown = null;
-        if (typeof navigator !== 'undefined' && (navigator as { gpu?: unknown }).gpu) {
+        let activeDevice: KokoroDeviceType = 'wasm';
+
+        // Try WebGPU first if GPU is available and not explicitly forced to wasm
+        if (gpuInfo.available && preferredDevice !== 'wasm') {
           try {
-            this.state.progressText = 'Connecting GPU acceleration (WebGPU)...';
+            this.state.progressText = `Initializing GPU acceleration (${gpuInfo.adapterName})...`;
             this.notify();
+
             tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-              dtype: 'q8',
+              dtype: 'fp32',
               device: 'webgpu',
               progress_callback: progressCb,
             });
+            activeDevice = 'webgpu';
+            console.log(`[Kokoro] Initialized WebGPU on ${gpuInfo.adapterName}`);
           } catch (gpuErr) {
-            console.warn('[Kokoro] WebGPU unavailable or failed, falling back to WASM:', gpuErr);
+            console.warn(
+              '[Kokoro] WebGPU unavailable or failed, falling back to CPU (WASM):',
+              gpuErr,
+            );
             tts = null;
           }
         }
 
-        // If WebGPU was unavailable or threw, run with WASM
+        // If WebGPU was unavailable, skipped, or failed: use CPU WASM
         if (!tts) {
-          this.state.progressText = 'Starting on-device neural engine (WASM)...';
+          activeDevice = 'wasm';
+          this.state.progressText = 'Starting on-device neural engine (CPU WASM)...';
           this.notify();
+
           tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
             dtype: 'q8',
             device: 'wasm',
             progress_callback: progressCb,
           });
+          console.log('[Kokoro] Initialized CPU WASM engine');
         }
 
         this.ttsInstance = tts;
+        this.state.activeDevice = activeDevice;
         this.state.status = 'ready';
         this.state.progress = 100;
-        this.state.progressText = 'Ready';
+        this.state.progressText =
+          activeDevice === 'webgpu'
+            ? `Ready on GPU (${gpuInfo.adapterName})`
+            : 'Ready on CPU (WASM)';
         this.state.error = null;
+        await this.checkIfModelCached();
         this.notify();
         return true;
       } catch (err) {
@@ -387,6 +518,9 @@ class KokoroModelManager {
       progress: 0,
       progressText: '',
       error: null,
+      activeDevice: null,
+      gpuInfo: this.state.gpuInfo,
+      cachedModelType: 'none',
     };
     this.notify();
   }

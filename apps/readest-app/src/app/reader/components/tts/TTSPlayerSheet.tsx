@@ -749,29 +749,73 @@ const TTSPlayerSheet = ({
                 <RiVoiceAiFill size={iconSize24} className='text-primary shrink-0' />
                 <div className='flex flex-col items-start min-w-0'>
                   <div className='flex items-center gap-1.5 flex-wrap'>
-                    <span className='text-sm font-semibold truncate'>{_('Kokoro Neural Voices')}</span>
+                    <span className='text-sm font-semibold truncate'>
+                      {_('Kokoro Neural Voices')}
+                    </span>
                     <span className='badge badge-xs badge-primary'>{_('Open Source')}</span>
+                    {kokoroState.activeDevice === 'webgpu' && (
+                      <span className='badge badge-xs badge-success gap-0.5 text-[10px]'>
+                        ⚡ GPU
+                      </span>
+                    )}
+                    {kokoroState.activeDevice === 'wasm' && (
+                      <span className='badge badge-xs badge-ghost gap-0.5 text-[10px]'>CPU</span>
+                    )}
                   </div>
                   <span className='text-base-content/60 text-xs truncate max-w-full'>
                     {kokoroState.status === 'ready'
-                      ? _('Installed (~86 MB) · 15+ Natural Voices')
+                      ? kokoroState.activeDevice === 'webgpu'
+                        ? _('⚡ GPU Ready ({{gpu}}) · 15+ Voices', {
+                            gpu: kokoroState.gpuInfo?.adapterName || 'Direct3D 12',
+                          })
+                        : kokoroState.gpuInfo?.available
+                          ? _('Installed (~86 MB CPU) · GPU model available', {
+                              gpu: kokoroState.gpuInfo.adapterName,
+                            })
+                          : _('Installed (~86 MB) · 15+ Natural Voices')
                       : kokoroState.status === 'downloading'
-                        ? kokoroState.progressText || _('Downloading model... {{progress}}%', { progress: kokoroState.progress })
+                        ? kokoroState.progressText ||
+                          _('Downloading model... {{progress}}%', {
+                            progress: kokoroState.progress,
+                          })
                         : kokoroState.status === 'error'
                           ? _('Failed: {{err}}', { err: kokoroState.error || 'Network error' })
-                          : _('Human-like on-device reading (~86 MB)')}
+                          : kokoroState.gpuInfo?.available
+                            ? _('GPU Ready ({{gpu}}) · Fast Reading', {
+                                gpu: kokoroState.gpuInfo.adapterName,
+                              })
+                            : _('Human-like on-device reading (~86 MB)')}
                   </span>
                 </div>
               </div>
-              <div className='shrink-0 ml-2'>
+              <div className='shrink-0 ml-2 flex items-center gap-1.5'>
                 {kokoroState.status === 'ready' ? (
-                  <button
-                    type='button'
-                    onClick={() => setView('voice')}
-                    className='btn btn-xs btn-primary'
-                  >
-                    {_('Pick Voice')}
-                  </button>
+                  <>
+                    {kokoroState.activeDevice === 'wasm' &&
+                      kokoroState.gpuInfo?.available &&
+                      kokoroState.cachedModelType !== 'gpu' &&
+                      kokoroState.cachedModelType !== 'both' && (
+                        <button
+                          type='button'
+                          onClick={async () => {
+                            await kokoroModelManager.loadOrDownloadModel('webgpu');
+                          }}
+                          className='btn btn-xs btn-outline btn-success gap-1'
+                          title={_('Download GPU model (~325 MB) for fast reading on {{gpu}}', {
+                            gpu: kokoroState.gpuInfo.adapterName,
+                          })}
+                        >
+                          ⚡ {_('Use GPU')}
+                        </button>
+                      )}
+                    <button
+                      type='button'
+                      onClick={() => setView('voice')}
+                      className='btn btn-xs btn-primary'
+                    >
+                      {_('Pick Voice')}
+                    </button>
+                  </>
                 ) : kokoroState.status === 'downloading' ? (
                   <span className='loading loading-spinner loading-xs text-primary' />
                 ) : (
@@ -843,7 +887,10 @@ const TTSPlayerSheet = ({
               <div className='flex items-center justify-between text-xs font-semibold text-primary'>
                 <span className='flex items-center gap-1.5'>
                   <PiSpinner className='h-3.5 w-3.5 animate-spin' />
-                  {_('Downloading Kokoro Neural Model (~86 MB)...')}
+                  {kokoroState.progressText ||
+                    (kokoroState.gpuInfo?.available
+                      ? _('Downloading Kokoro GPU Neural Model (~325 MB)...')
+                      : _('Downloading Kokoro Neural Model (~86 MB)...'))}
                 </span>
                 <span>{kokoroState.progress}%</span>
               </div>

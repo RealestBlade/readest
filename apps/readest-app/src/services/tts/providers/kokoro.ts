@@ -5,11 +5,7 @@ import {
   SpeechSynthesisResult,
 } from './types';
 import { TTSVoicesGroup, TTSVoice } from '../types';
-import {
-  kokoroModelManager,
-  KOKORO_VOICES,
-  KokoroVoiceProfile,
-} from '../kokoroModelManager';
+import { kokoroModelManager, KOKORO_VOICES, KokoroVoiceProfile } from '../kokoroModelManager';
 
 // Convert Float32Array PCM samples (-1.0 to 1.0) into a standard 16-bit PCM WAV ArrayBuffer
 export function float32ToWav(samples: Float32Array, sampleRate = 24000): ArrayBuffer {
@@ -78,8 +74,10 @@ export class KokoroSpeechProvider implements SpeechProvider {
   }
 
   groupVoices(voices: TTSVoice[]): Omit<TTSVoicesGroup, 'disabled'>[] {
-    const isModelReady = kokoroModelManager.getState().status === 'ready';
-    const statusTag = isModelReady ? 'Ready' : 'Downloadable';
+    const state = kokoroModelManager.getState();
+    const isModelReady = state.status === 'ready';
+    const devTag = state.activeDevice === 'webgpu' ? '⚡ GPU' : 'Offline';
+    const statusTag = isModelReady ? devTag : 'Downloadable';
 
     const usVoices = voices.filter((v) => v.lang === 'en-US');
     const gbVoices = voices.filter((v) => v.lang === 'en-GB');
@@ -88,14 +86,14 @@ export class KokoroSpeechProvider implements SpeechProvider {
     if (usVoices.length > 0) {
       groups.push({
         id: 'kokoro-us',
-        name: `Neural Offline 🇺🇸 American (${statusTag})`,
+        name: `Neural (${statusTag}) 🇺🇸 American`,
         voices: usVoices,
       });
     }
     if (gbVoices.length > 0) {
       groups.push({
         id: 'kokoro-gb',
-        name: `Neural Offline 🇬🇧 British (${statusTag})`,
+        name: `Neural (${statusTag}) 🇬🇧 British`,
         voices: gbVoices,
       });
     }
@@ -159,10 +157,15 @@ export class KokoroSpeechProvider implements SpeechProvider {
         speed: 1.0, // Playout speed stretching is handled at the player level (WSOLA)
       });
       const elapsed = Math.round(performance.now() - startTime);
-      console.log(`[Kokoro] Synthesized ${text.length} chars in ${elapsed}ms (${rawVoice})`);
+      const activeDev = kokoroModelManager.getState().activeDevice || 'device';
+      console.log(
+        `[Kokoro] Synthesized ${text.length} chars in ${elapsed}ms (${rawVoice}) on ${activeDev}`,
+      );
 
       let audioBuffer: ArrayBuffer;
-      if (rawAudio.audio instanceof Float32Array) {
+      if (typeof rawAudio.toWav === 'function') {
+        audioBuffer = rawAudio.toWav();
+      } else if (rawAudio.audio instanceof Float32Array) {
         audioBuffer = float32ToWav(rawAudio.audio, rawAudio.sampling_rate || 24000);
       } else if (typeof rawAudio.toBlob === 'function') {
         const blob = rawAudio.toBlob();
@@ -176,6 +179,7 @@ export class KokoroSpeechProvider implements SpeechProvider {
         boundaries: [], // Sentence-level tracking provided by BufferedTTSClient
       };
     } catch (err) {
+      console.error(`[Kokoro] Synthesis error for voice "${rawVoice}":`, err);
       if (err instanceof Error && err.message.includes('permanent')) {
         throw new SpeechSynthesisPermanentError(err.message, { cause: err });
       }

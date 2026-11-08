@@ -113,6 +113,7 @@
     "@emnapi/runtime": "^1.8.1",
     "@fabianlars/tauri-plugin-oauth": "2",
     "@googleapis/androidpublisher": "^36.0.0",
+    "@huggingface/transformers": "^3.8.1",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/wasm-runtime": "^1.1.1",
     "@noble/hashes": "^1.8.0",
