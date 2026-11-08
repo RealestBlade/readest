@@ -756,8 +756,10 @@ const TTSPlayerSheet = ({
                     {kokoroState.status === 'ready'
                       ? _('Installed (~86 MB) · 15+ Natural Voices')
                       : kokoroState.status === 'downloading'
-                        ? _('Downloading model... {{progress}}%', { progress: kokoroState.progress })
-                        : _('Human-like on-device reading (~86 MB)')}
+                        ? kokoroState.progressText || _('Downloading model... {{progress}}%', { progress: kokoroState.progress })
+                        : kokoroState.status === 'error'
+                          ? _('Failed: {{err}}', { err: kokoroState.error || 'Network error' })
+                          : _('Human-like on-device reading (~86 MB)')}
                   </span>
                 </div>
               </div>
@@ -781,7 +783,7 @@ const TTSPlayerSheet = ({
                     className='btn btn-xs btn-primary gap-1'
                   >
                     <MdOutlineFileDownload size={14} />
-                    {_('Download')}
+                    {kokoroState.status === 'error' ? _('Retry') : _('Download')}
                   </button>
                 )}
               </div>

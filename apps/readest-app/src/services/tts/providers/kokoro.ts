@@ -130,12 +130,36 @@ export class KokoroSpeechProvider implements SpeechProvider {
     // Strip "offline-kokoro:" or "kokoro:" prefix if present
     const rawVoice = req.voice.replace(/^(offline-kokoro|kokoro):/, '');
 
+    // Pre-cache requested voice from local assets if not already in CacheStorage
+    if (typeof window !== 'undefined' && typeof caches !== 'undefined') {
+      try {
+        const cache = await caches.open('kokoro-voices');
+        const hfUrl = `https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/${rawVoice}.bin`;
+        const cached = await cache.match(hfUrl);
+        if (!cached) {
+          const res = await fetch(`/voices/${rawVoice}.bin`);
+          if (res.ok) {
+            const buf = await res.arrayBuffer();
+            await cache.put(
+              hfUrl,
+              new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }),
+            );
+          }
+        }
+      } catch (e) {
+        console.warn(`[Kokoro] Pre-caching voice ${rawVoice} failed:`, e);
+      }
+    }
+
     try {
       // Execute inference
+      const startTime = performance.now();
       const rawAudio = await tts.generate(text, {
         voice: rawVoice,
         speed: 1.0, // Playout speed stretching is handled at the player level (WSOLA)
       });
+      const elapsed = Math.round(performance.now() - startTime);
+      console.log(`[Kokoro] Synthesized ${text.length} chars in ${elapsed}ms (${rawVoice})`);
 
       let audioBuffer: ArrayBuffer;
       if (rawAudio.audio instanceof Float32Array) {

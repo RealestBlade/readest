@@ -250,37 +250,106 @@ class KokoroModelManager {
 
       try {
         // Dynamically load kokoro-js
-        const { KokoroTTS } = await import('kokoro-js');
+        const { KokoroTTS, env } = await import('kokoro-js');
 
-        // Check if WebGPU is available, otherwise default to wasm
-        let device: 'webgpu' | 'wasm' = 'wasm';
-        if (typeof navigator !== 'undefined' && (navigator as { gpu?: unknown }).gpu) {
-          device = 'webgpu';
+        // Configure local WASM assets and proxy
+        const anyEnv = env as unknown as {
+          wasmPaths?: unknown;
+          backends?: { onnx?: { wasm?: { proxy?: boolean; wasmPaths?: unknown } } };
+        };
+        if (typeof window !== 'undefined') {
+          try {
+            const ortPath = `${window.location.origin}/ort/`;
+            anyEnv.wasmPaths = ortPath;
+            if (anyEnv?.backends?.onnx?.wasm) {
+              anyEnv.backends.onnx.wasm.proxy = false;
+              anyEnv.backends.onnx.wasm.wasmPaths = ortPath;
+            }
+          } catch {
+            /* ignore */
+          }
         }
 
-        this.ttsInstance = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-          dtype: 'q8',
-          device,
-          progress_callback: (p: { status?: string; progress?: number; file?: string }) => {
-            if (p.status === 'progress' && typeof p.progress === 'number') {
-              this.state.progress = Math.min(99, Math.round(p.progress));
-              this.state.progressText = `Downloading voice model: ${this.state.progress}%`;
-              this.notify();
-            } else if (p.status === 'done') {
-              this.state.progress = 100;
-              this.state.progressText = 'Model loaded successfully';
-              this.notify();
+        // Preload default af_heart voice from local assets into CacheStorage so inference starts instantly offline
+        if (typeof window !== 'undefined' && typeof caches !== 'undefined') {
+          try {
+            const cache = await caches.open('kokoro-voices');
+            const hfUrl = `https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin`;
+            const cached = await cache.match(hfUrl);
+            if (!cached) {
+              const res = await fetch('/voices/af_heart.bin');
+              if (res.ok) {
+                const buf = await res.arrayBuffer();
+                await cache.put(
+                  hfUrl,
+                  new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }),
+                );
+              }
             }
-          },
-        });
+          } catch (e) {
+            console.warn('[Kokoro] Could not pre-cache default voice:', e);
+          }
+        }
 
+        const progressCb = (p: {
+          status?: string;
+          progress?: number;
+          loaded?: number;
+          total?: number;
+          file?: string;
+        }) => {
+          if (p && typeof p.progress === 'number') {
+            this.state.progress = Math.min(99, Math.round(p.progress));
+            const fileName = p.file ? p.file.split('/').pop() : '';
+            this.state.progressText = fileName
+              ? `Downloading ${fileName}... ${this.state.progress}%`
+              : `Downloading model... ${this.state.progress}%`;
+            this.notify();
+          } else if (p && p.status === 'done') {
+            this.state.progress = 99;
+            this.state.progressText = 'Loading neural weights into memory...';
+            this.notify();
+          }
+        };
+
+        // Try WebGPU first if available, with graceful fallback to WASM
+        let tts: unknown = null;
+        if (typeof navigator !== 'undefined' && (navigator as { gpu?: unknown }).gpu) {
+          try {
+            this.state.progressText = 'Connecting GPU acceleration (WebGPU)...';
+            this.notify();
+            tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+              dtype: 'q8',
+              device: 'webgpu',
+              progress_callback: progressCb,
+            });
+          } catch (gpuErr) {
+            console.warn('[Kokoro] WebGPU unavailable or failed, falling back to WASM:', gpuErr);
+            tts = null;
+          }
+        }
+
+        // If WebGPU was unavailable or threw, run with WASM
+        if (!tts) {
+          this.state.progressText = 'Starting on-device neural engine (WASM)...';
+          this.notify();
+          tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+            dtype: 'q8',
+            device: 'wasm',
+            progress_callback: progressCb,
+          });
+        }
+
+        this.ttsInstance = tts;
         this.state.status = 'ready';
         this.state.progress = 100;
         this.state.progressText = 'Ready';
+        this.state.error = null;
         this.notify();
         return true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        console.error('[Kokoro] Model initialization failed:', err);
         this.state.status = 'error';
         this.state.error = msg;
         this.state.progressText = `Failed: ${msg}`;
