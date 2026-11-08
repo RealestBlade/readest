@@ -19,9 +19,11 @@ import {
   MdTextIncrease,
 } from 'react-icons/md';
 import { RiForward30Line, RiReplay15Line, RiVoiceAiFill } from 'react-icons/ri';
+import { PiSpinner } from 'react-icons/pi';
 import { TbArrowBarToRight } from 'react-icons/tb';
 import { useAppRouter } from '@/hooks/useAppRouter';
 import { TTSVoicesGroup } from '@/services/tts';
+import { kokoroModelManager, KokoroModelState } from '@/services/tts/kokoroModelManager';
 import { MEDIA_OVERLAY_VOICE_ID } from '@/services/tts/mediaOverlay';
 import type { TTSLoopState } from '@/services/tts/TTSController';
 import { saveViewSettings } from '@/helpers/settings';
@@ -190,6 +192,15 @@ const TTSPlayerSheet = ({
   const [coverFailed, setCoverFailed] = useState(false);
   const [view, setView] = useState<SheetView>('main');
   const [voiceGroups, setVoiceGroups] = useState<TTSVoicesGroup[]>([]);
+  const [kokoroState, setKokoroState] = useState<KokoroModelState>(kokoroModelManager.getState());
+  const [downloadingKokoroVoice, setDownloadingKokoroVoice] = useState<{
+    voice: string;
+    lang: string;
+  } | null>(null);
+
+  useEffect(() => {
+    return kokoroModelManager.subscribe((s) => setKokoroState(s));
+  }, []);
   const [rate, setRate] = useState(viewSettings?.ttsRate ?? 1.0);
   const [selectedVoice, setSelectedVoice] = useState('');
   // The voice list is an accordion: at most one group open. Until the reader
@@ -334,7 +345,13 @@ const TTSPlayerSheet = ({
     saveSettings(envConfig, settings);
   };
 
-  const handleSelectVoice = (voice: string, lang: string) => {
+  const handleSelectVoice = async (voice: string, lang: string) => {
+    if (voice.startsWith('offline-kokoro:') && kokoroModelManager.getState().status !== 'ready') {
+      setDownloadingKokoroVoice({ voice, lang });
+      const ok = await kokoroModelManager.loadOrDownloadModel();
+      setDownloadingKokoroVoice(null);
+      if (!ok) return;
+    }
     onSetVoice(voice, lang);
     setSelectedVoice(voice);
     const vs = getViewSettings(bookKey)!;
@@ -755,6 +772,25 @@ const TTSPlayerSheet = ({
       )}
       {view === 'voice' && (
         <div className='flex w-full flex-col pb-4'>
+          {downloadingKokoroVoice && (
+            <div className='mb-3 flex w-full flex-col gap-1.5 rounded-xl bg-primary/10 border border-primary/20 p-3'>
+              <div className='flex items-center justify-between text-xs font-semibold text-primary'>
+                <span className='flex items-center gap-1.5'>
+                  <PiSpinner className='h-3.5 w-3.5 animate-spin' />
+                  {_('Downloading Kokoro Neural Model (~86 MB)...')}
+                </span>
+                <span>{kokoroState.progress}%</span>
+              </div>
+              <progress
+                className='progress progress-primary w-full h-2'
+                value={kokoroState.progress}
+                max='100'
+              />
+              <span className='text-[11px] opacity-70'>
+                {_('One-time download for offline human-like reading')}
+              </span>
+            </div>
+          )}
           {voiceGroups.map((voiceGroup) => {
             const collapsed = voiceGroup.id !== openGroup;
             // The group holding the voice in use stands out, and names it

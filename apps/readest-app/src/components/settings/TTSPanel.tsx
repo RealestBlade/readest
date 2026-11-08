@@ -26,6 +26,8 @@ import {
   SettingsSwitchRow,
 } from './primitives';
 import CustomTTSServices from './CustomTTSServices';
+import KokoroModelManagerView from './KokoroModelManagerView';
+import { kokoroModelManager } from '@/services/tts/kokoroModelManager';
 import TTSHighlightStyleEditor, { TTSHighlightStyle } from './theme/TTSHighlightStyleEditor';
 
 const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
@@ -35,6 +37,14 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
   const { token, user } = useAuth();
   const hasPremium = isCustomTTSAllowed(token);
   const [showCustomServices, setShowCustomServices] = useState(false);
+  const [showKokoroManager, setShowKokoroManager] = useState(false);
+  const [isKokoroReady, setIsKokoroReady] = useState(kokoroModelManager.getState().status === 'ready');
+
+  useEffect(() => {
+    const unsub = kokoroModelManager.subscribe((s) => setIsKokoroReady(s.status === 'ready'));
+    kokoroModelManager.checkIfModelCached();
+    return () => unsub();
+  }, []);
   const { getViewSettings } = useReaderStore();
   const { settings, setSettings, saveSettings } = useSettingsStore();
   const viewSettings = getViewSettings(bookKey) || settings.globalViewSettings;
@@ -182,9 +192,24 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     );
   }
 
+  if (showKokoroManager) {
+    return (
+      <div className='w-full'>
+        <KokoroModelManagerView onBack={() => setShowKokoroManager(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className='my-4 w-full space-y-6'>
       <BoxedList title={_('Voices')} cardClassName='overflow-hidden'>
+        <NavigationRow
+          title={_('Offline Voice Models (Kokoro 82M)')}
+          status={isKokoroReady ? _('Installed (~86 MB) · 15+ Voices') : _('Downloadable (~86 MB)')}
+          badge={_('Open Source')}
+          onClick={() => setShowKokoroManager(true)}
+          data-setting-id='settings.tts.kokoroModels'
+        />
         <NavigationRow
           title={_('Custom TTS Services')}
           status={_('Use your own OpenAI-compatible speech service')}

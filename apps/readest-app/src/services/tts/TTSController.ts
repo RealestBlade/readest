@@ -22,6 +22,7 @@ import { WebSpeechClient } from './WebSpeechClient';
 import { NativeTTSClient } from './NativeTTSClient';
 import { EdgeTTSClient } from './EdgeTTSClient';
 import { BufferedTTSClient } from './BufferedTTSClient';
+import { KokoroSpeechProvider } from './providers/kokoro';
 import { createBookTTSCacheStore } from './providers/bookCacheStore';
 import { CachingProvider } from './providers/cache';
 import { ReadestVoiceProvider } from './providers/readest';
@@ -287,11 +288,14 @@ export class TTSController extends EventTarget {
   // of store imports.
   #customTTSServices: () => CustomTTSService[] = () => [];
   ttsNativeClient: TTSClient | null = null;
+  ttsKokoroClient: BufferedTTSClient;
+  #kokoroProvider: KokoroSpeechProvider;
   ttsMediaOverlayClient: MediaOverlayClient;
   ttsWebVoices: TTSVoice[] = [];
   ttsEdgeVoices: TTSVoice[] = [];
   ttsReadestVoices: TTSVoice[] = [];
   ttsCustomVoices: TTSVoice[] = [];
+  ttsKokoroVoices: TTSVoice[] = [];
   ttsNativeVoices: TTSVoice[] = [];
   ttsTargetLang: string = '';
 
@@ -326,6 +330,12 @@ export class TTSController extends EventTarget {
     );
     this.ttsCustomClient = new BufferedTTSClient(
       cacheStore ? new CachingProvider(customProvider, cacheStore) : customProvider,
+      this,
+      appService,
+    );
+    this.#kokoroProvider = new KokoroSpeechProvider();
+    this.ttsKokoroClient = new BufferedTTSClient(
+      cacheStore ? new CachingProvider(this.#kokoroProvider, cacheStore) : this.#kokoroProvider,
       this,
       appService,
     );
@@ -519,6 +529,7 @@ export class TTSController extends EventTarget {
     // Results are still taken in priority order.
     const readestReady = withinEngineTimeout(this.ttsReadestClient.init(), false);
     const customReady = withinEngineTimeout(this.ttsCustomClient.init(), false);
+    const kokoroReady = withinEngineTimeout(this.ttsKokoroClient.init(), false);
     const edgeReady = withinEngineTimeout(this.ttsEdgeClient.init(), false);
     const nativeReady = this.ttsNativeClient
       ? withinEngineTimeout(this.ttsNativeClient.init(), false)
@@ -533,6 +544,10 @@ export class TTSController extends EventTarget {
     }
     if (await webReady) {
       availableClients.push(this.ttsWebClient);
+    }
+    const kokoroOk = await kokoroReady;
+    if (kokoroOk) {
+      availableClients.push(this.ttsKokoroClient);
     }
     // Last: Readest Voice is never the default, only a remembered choice.
     const readestOk = await readestReady;
@@ -554,12 +569,13 @@ export class TTSController extends EventTarget {
       }
     }
     // An engine whose init failed or timed out has no voices to list.
-    [this.ttsWebVoices, this.ttsEdgeVoices, this.ttsReadestVoices, this.ttsCustomVoices] =
+    [this.ttsWebVoices, this.ttsEdgeVoices, this.ttsReadestVoices, this.ttsCustomVoices, this.ttsKokoroVoices] =
       await Promise.all([
         withinEngineTimeout(this.ttsWebClient.getAllVoices(), []),
         withinEngineTimeout(this.ttsEdgeClient.getAllVoices(), []),
         readestOk ? withinEngineTimeout(this.ttsReadestClient.getAllVoices(), []) : [],
         customOk ? this.ttsCustomClient.getAllVoices() : [],
+        kokoroOk ? this.ttsKokoroClient.getAllVoices() : [],
       ]);
 
     // A book that ships its own narration should be read by its narrator, not
@@ -1270,6 +1286,7 @@ export class TTSController extends EventTarget {
     this.ttsEdgeClient.setSentenceGap(sec);
     this.ttsReadestClient.setSentenceGap(sec);
     this.ttsCustomClient.setSentenceGap(sec);
+    this.ttsKokoroClient.setSentenceGap(sec);
   }
 
   // Universal (not Edge-only) paragraph-to-paragraph gap, in wall-clock
@@ -1282,6 +1299,7 @@ export class TTSController extends EventTarget {
     this.ttsEdgeClient.setParagraphGap(sec);
     this.ttsReadestClient.setParagraphGap(sec);
     this.ttsCustomClient.setParagraphGap(sec);
+    this.ttsKokoroClient.setParagraphGap(sec);
   }
 
   // Abortable delay inserted before auto-advancing to the next paragraph.
@@ -2244,7 +2262,8 @@ export class TTSController extends EventTarget {
       );
     if (
       (this.ttsClient === this.ttsReadestClient && !speaks(this.ttsReadestVoices)) ||
-      (this.ttsClient === this.ttsCustomClient && !speaks(this.ttsCustomVoices))
+      (this.ttsClient === this.ttsCustomClient && !speaks(this.ttsCustomVoices)) ||
+      (this.ttsClient === this.ttsKokoroClient && !speaks(this.ttsKokoroVoices))
     ) {
       this.ttsClient = this.ttsEdgeClient.initialized ? this.ttsEdgeClient : this.ttsWebClient;
     }
@@ -2255,6 +2274,7 @@ export class TTSController extends EventTarget {
     if (this.ttsEdgeClient.initialized) this.ttsEdgeClient.setPrimaryLang(lang);
     if (this.ttsReadestClient.initialized) this.ttsReadestClient.setPrimaryLang(lang);
     if (this.ttsCustomClient.initialized) this.ttsCustomClient.setPrimaryLang(lang);
+    if (this.ttsKokoroClient.initialized) this.ttsKokoroClient.setPrimaryLang(lang);
     if (this.ttsWebClient.initialized) this.ttsWebClient.setPrimaryLang(lang);
     if (this.ttsNativeClient?.initialized) this.ttsNativeClient?.setPrimaryLang(lang);
     if (this.ttsMediaOverlayClient.initialized) this.ttsMediaOverlayClient.setPrimaryLang(lang);
@@ -2293,11 +2313,15 @@ export class TTSController extends EventTarget {
     const ttsCustomVoices = this.ttsCustomClient.initialized
       ? (await this.ttsCustomClient.getVoices(lang)).filter((group) => group.voices.length > 0)
       : [];
+    const ttsKokoroVoices = this.ttsKokoroClient.initialized
+      ? (await this.ttsKokoroClient.getVoices(lang)).filter((group) => group.voices.length > 0)
+      : [];
 
     const voicesGroups = [
       ...narrationVoices,
       ...ttsCustomVoices,
       ...ttsReadestVoices,
+      ...ttsKokoroVoices,
       ...ttsEdgeVoices,
       ...ttsNativeVoices,
       ...ttsWebVoices,
@@ -2332,6 +2356,11 @@ export class TTSController extends EventTarget {
     // Never for the engine-default voice (''): Edge and native treat it as
     // "any enabled voice", and matching it here would move a paying reader who
     // never chose Readest Voice onto it.
+    const useKokoroTTS =
+      voiceId !== '' &&
+      this.ttsKokoroClient.initialized &&
+      (voiceId.startsWith('offline-kokoro:') ||
+        this.ttsKokoroVoices.some((voice) => voice.id === voiceId && !voice.disabled));
     const useCustomTTS =
       voiceId !== '' &&
       this.ttsCustomClient.initialized &&
@@ -2346,7 +2375,10 @@ export class TTSController extends EventTarget {
     const useNativeTTS = !!this.ttsNativeVoices.find(
       (voice) => (voiceId === '' || voice.id === voiceId) && !voice.disabled,
     );
-    if (useCustomTTS) {
+    if (useKokoroTTS) {
+      this.ttsClient = this.ttsKokoroClient;
+      await this.ttsClient.setRate(this.ttsRate);
+    } else if (useCustomTTS) {
       this.ttsClient = this.ttsCustomClient;
       await this.ttsClient.setRate(this.ttsRate);
     } else if (useReadestTTS) {
@@ -2727,6 +2759,9 @@ export class TTSController extends EventTarget {
     }
     if (this.ttsReadestClient.initialized) {
       await this.ttsReadestClient.shutdown();
+    }
+    if (this.ttsKokoroClient.initialized) {
+      await this.ttsKokoroClient.shutdown();
     }
     if (this.ttsCustomClient.initialized) {
       await this.ttsCustomClient.shutdown();

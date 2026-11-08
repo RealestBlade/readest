@@ -114,6 +114,12 @@ vi.mock('@/services/tts/BufferedTTSClient', () => ({
       h.customArgs = args;
       return;
     }
+    if ((args[0] as { id: string })?.id === 'kokoro-tts') {
+      Object.assign(this, mockClient('kokoro-tts'), bufferedExtras());
+      (this['getAllVoices'] as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (this['getVoices'] as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      return;
+    }
     h.bufferedArgs.push(args);
     Object.assign(this, mockClient('readest-tts'), bufferedExtras());
     (this['init'] as ReturnType<typeof vi.fn>).mockImplementation(async function (this: {
