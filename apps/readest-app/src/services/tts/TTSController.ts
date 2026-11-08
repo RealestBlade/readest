@@ -2358,9 +2358,9 @@ export class TTSController extends EventTarget {
     // never chose Readest Voice onto it.
     const useKokoroTTS =
       voiceId !== '' &&
-      this.ttsKokoroClient.initialized &&
       (voiceId.startsWith('offline-kokoro:') ||
-        this.ttsKokoroVoices.some((voice) => voice.id === voiceId && !voice.disabled));
+        (this.ttsKokoroClient.initialized &&
+          this.ttsKokoroVoices.some((voice) => voice.id === voiceId && !voice.disabled)));
     const useCustomTTS =
       voiceId !== '' &&
       this.ttsCustomClient.initialized &&
@@ -2376,6 +2376,9 @@ export class TTSController extends EventTarget {
       (voice) => (voiceId === '' || voice.id === voiceId) && !voice.disabled,
     );
     if (useKokoroTTS) {
+      if (!this.ttsKokoroClient.initialized) {
+        await this.ttsKokoroClient.init();
+      }
       this.ttsClient = this.ttsKokoroClient;
       await this.ttsClient.setRate(this.ttsRate);
     } else if (useCustomTTS) {

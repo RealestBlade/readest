@@ -24,6 +24,7 @@ import { TbArrowBarToRight } from 'react-icons/tb';
 import { useAppRouter } from '@/hooks/useAppRouter';
 import { TTSVoicesGroup } from '@/services/tts';
 import { kokoroModelManager, KokoroModelState } from '@/services/tts/kokoroModelManager';
+import { KokoroSpeechProvider } from '@/services/tts/providers/kokoro';
 import { MEDIA_OVERLAY_VOICE_ID } from '@/services/tts/mediaOverlay';
 import type { TTSLoopState } from '@/services/tts/TTSController';
 import { saveViewSettings } from '@/helpers/settings';
@@ -199,6 +200,7 @@ const TTSPlayerSheet = ({
   } | null>(null);
 
   useEffect(() => {
+    kokoroModelManager.checkIfModelCached();
     return kokoroModelManager.subscribe((s) => setKokoroState(s));
   }, []);
   const [rate, setRate] = useState(viewSettings?.ttsRate ?? 1.0);
@@ -305,8 +307,19 @@ const TTSPlayerSheet = ({
     // language changed) must not overwrite its result.
     let current = true;
     const fetchVoices = async () => {
-      const groups = await onGetVoices(ttsLang);
+      let groups = await onGetVoices(ttsLang);
       if (!current) return;
+      if (!groups.some((g) => g.id.startsWith('kokoro-'))) {
+        const isEnglish = !ttsLang || ttsLang.toLowerCase().startsWith('en');
+        if (isEnglish) {
+          const kokoroProvider = new KokoroSpeechProvider();
+          const allKokoro = await kokoroProvider.getAllVoices();
+          const kokoroGroups = kokoroProvider.groupVoices(allKokoro) as TTSVoicesGroup[];
+          if (kokoroGroups.length > 0) {
+            groups = [...groups, ...kokoroGroups];
+          }
+        }
+      }
       const voicesCount = groups.reduce((acc, group) => acc + group.voices.length, 0);
       if (!groups || voicesCount === 0) {
         setVoiceGroups([
@@ -729,6 +742,57 @@ const TTSPlayerSheet = ({
                 {timerCaption}
               </span>
             </button>
+          </div>
+          <div className='not-eink:bg-base-200 eink-bordered flex w-full flex-col gap-2 rounded-xl p-3'>
+            <div className='flex w-full items-center justify-between'>
+              <div className='flex items-center gap-2.5 min-w-0'>
+                <RiVoiceAiFill size={iconSize24} className='text-primary shrink-0' />
+                <div className='flex flex-col items-start min-w-0'>
+                  <div className='flex items-center gap-1.5 flex-wrap'>
+                    <span className='text-sm font-semibold truncate'>{_('Kokoro Neural Voices')}</span>
+                    <span className='badge badge-xs badge-primary'>{_('Open Source')}</span>
+                  </div>
+                  <span className='text-base-content/60 text-xs truncate max-w-full'>
+                    {kokoroState.status === 'ready'
+                      ? _('Installed (~86 MB) · 15+ Natural Voices')
+                      : kokoroState.status === 'downloading'
+                        ? _('Downloading model... {{progress}}%', { progress: kokoroState.progress })
+                        : _('Human-like on-device reading (~86 MB)')}
+                  </span>
+                </div>
+              </div>
+              <div className='shrink-0 ml-2'>
+                {kokoroState.status === 'ready' ? (
+                  <button
+                    type='button'
+                    onClick={() => setView('voice')}
+                    className='btn btn-xs btn-primary'
+                  >
+                    {_('Pick Voice')}
+                  </button>
+                ) : kokoroState.status === 'downloading' ? (
+                  <span className='loading loading-spinner loading-xs text-primary' />
+                ) : (
+                  <button
+                    type='button'
+                    onClick={async () => {
+                      await kokoroModelManager.loadOrDownloadModel();
+                    }}
+                    className='btn btn-xs btn-primary gap-1'
+                  >
+                    <MdOutlineFileDownload size={14} />
+                    {_('Download')}
+                  </button>
+                )}
+              </div>
+            </div>
+            {kokoroState.status === 'downloading' && (
+              <progress
+                className='progress progress-primary w-full h-1.5'
+                value={kokoroState.progress}
+                max='100'
+              />
+            )}
           </div>
           {!isNarrating && downloads.supported && downloads.chapters.length > 0 && (
             <button

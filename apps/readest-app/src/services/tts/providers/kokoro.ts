@@ -88,14 +88,14 @@ export class KokoroSpeechProvider implements SpeechProvider {
     if (usVoices.length > 0) {
       groups.push({
         id: 'kokoro-us',
-        name: `Kokoro Neural 🇺🇸 American (${statusTag})`,
+        name: `Neural Offline 🇺🇸 American (${statusTag})`,
         voices: usVoices,
       });
     }
     if (gbVoices.length > 0) {
       groups.push({
         id: 'kokoro-gb',
-        name: `Kokoro Neural 🇬🇧 British (${statusTag})`,
+        name: `Neural Offline 🇬🇧 British (${statusTag})`,
         voices: gbVoices,
       });
     }
